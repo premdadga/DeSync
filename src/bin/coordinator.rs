@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -31,15 +31,25 @@ async fn main() -> Result<()> {
     println!("coord listeing");
     loop {
         let (mut socket, addr) = listener.accept().await?;
-        let reg: Register = recv_json(&mut socket).await?;
-        println!("worker registered {}", reg.id);
-
-        let job = Job {
-            id: "dummy job".to_string(),
-            cmd: "echo hello world && uname -a".to_string(),
-        };
-        send_json(&mut socket, &job).await?;
-        let res: JobResult = recv_json(&mut socket).await?;
-        println!("job result :\n {}", res.output);
+        tokio::spawn(async move {
+            if let Err(e) = handle_worker(&mut socket).await {
+                eprintln!("worker task error {e}");
+            }
+        });
+        println!("worker disconnected");
     }
+}
+
+async fn handle_worker(socket: &mut TcpStream) -> Result<()> {
+    let reg: Register = recv_json(socket).await?;
+    println!("worker registered {}", reg.id);
+
+    let job = Job {
+        id: "dummy job".to_string(),
+        cmd: "echo hello world && uname -a".to_string(),
+    };
+    send_json(socket, &job).await?;
+    let res: JobResult = recv_json(socket).await?;
+    println!("job result :\n {}", res.output);
+    Ok(())
 }
