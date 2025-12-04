@@ -6,6 +6,8 @@ use tokio::{
     process::Command,
 };
 
+use desync::net::{recv_json, send_json};
+
 #[derive(Serialize, Deserialize)]
 struct Register {
     id: String,
@@ -32,13 +34,9 @@ async fn main() -> Result<()> {
     let reg = Register {
         id: "worker1".to_string(),
     };
-    let out = serde_json::to_string(&reg)?;
-    socket.write_all(out.as_bytes()).await?; //write all does the job
-                                             //reading job from server
-    let mut buf = vec![0u8; 16384];
-    let n = socket.read(&mut buf).await?;
-    let recv = String::from_utf8_lossy(&buf[..n]);
-    let job: Job = serde_json::from_str(&recv)?;
+    //reading job from server
+    send_json(&mut socket, &reg).await?;
+    let job: Job = recv_json(&mut socket).await?;
     println!("got the job {:?}", job.cmd);
 
     //executing the job
@@ -59,8 +57,7 @@ async fn main() -> Result<()> {
         output: combined,
     };
 
-    let msg = serde_json::to_string(&result)?;
-    socket.write_all(msg.as_bytes()).await?;
+    send_json(&mut socket, &result).await?;
     println!("resunnt sent");
 
     Ok(())
