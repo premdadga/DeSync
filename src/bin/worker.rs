@@ -15,10 +15,13 @@ struct Job {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct JobResult {
-    job_id: String,
-    success: bool,
-    output: String,
+enum WorkerMessage {
+    Ready,
+    JobResult {
+        job_id: String,
+        success: bool,
+        output: String,
+    },
 }
 
 #[tokio::main]
@@ -26,15 +29,19 @@ async fn main() -> Result<()> {
     let mut socket = TcpStream::connect("127.0.0.1:6000").await?;
     println!("Connected to coordinator");
 
-    // Register with coordinator
+    // Register
     let reg = Register {
         id: "worker1".to_string(),
     };
     send_json(&mut socket, &reg).await?;
     println!("Registered as {}", reg.id);
 
-    // Job loop - keep handling jobs!
+    // Worker loop: signal ready, get job, execute, send result, repeat
     loop {
+        // Signal: I'm ready for work!
+        send_json(&mut socket, &WorkerMessage::Ready).await?;
+        println!("Sent ready signal");
+
         // Wait for job from coordinator
         let job: Job = match recv_json(&mut socket).await {
             Ok(job) => job,
@@ -46,7 +53,7 @@ async fn main() -> Result<()> {
 
         println!("Received job {}: {}", job.id, job.cmd);
 
-        // Execute the job
+        // Execute
         let output = if cfg!(target_os = "windows") {
             Command::new("cmd").arg("/C").arg(&job.cmd).output().await?
         } else {
@@ -60,13 +67,12 @@ async fn main() -> Result<()> {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        let result = JobResult {
+        // Send result
+        let result = WorkerMessage::JobResult {
             job_id: job.id.clone(),
             success,
             output: combined,
         };
-
-        // Send result back
         send_json(&mut socket, &result).await?;
         println!("Job {} completed, sent result", job.id);
     }
