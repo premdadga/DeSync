@@ -1,7 +1,11 @@
 use anyhow::Result;
 use desync::net::{recv_json, send_json};
 use serde::{Deserialize, Serialize};
-use tokio::{net::TcpStream, process::Command};
+use tokio::{
+    net::TcpStream,
+    process::Command,
+    time::{self, Duration},
+};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Register {
@@ -17,6 +21,7 @@ struct Job {
 #[derive(Serialize, Deserialize, Debug)]
 enum WorkerMessage {
     Ready,
+    Heartbeat,
     JobResult {
         job_id: String,
         success: bool,
@@ -31,18 +36,25 @@ async fn main() -> Result<()> {
 
     // Register
     let reg = Register {
-        id: "worker1".to_string(),
+        id: format!(
+            "worker_{}",
+            uuid::Uuid::new_v4().to_string()[..8].to_string()
+        ),
     };
     send_json(&mut socket, &reg).await?;
     println!("Registered as {}", reg.id);
 
-    // Worker loop: signal ready, get job, execute, send result, repeat
+    // Spawn heartbeat task
+    let socket_clone = socket.try_clone()?;
+    tokio::spawn(async move { send_heartbeats(socket_clone).await });
+
+    // Worker loop
     loop {
         // Signal: I'm ready for work!
         send_json(&mut socket, &WorkerMessage::Ready).await?;
         println!("Sent ready signal");
 
-        // Wait for job from coordinator
+        // Wait for job
         let job: Job = match recv_json(&mut socket).await {
             Ok(job) => job,
             Err(e) => {
@@ -74,9 +86,26 @@ async fn main() -> Result<()> {
             output: combined,
         };
         send_json(&mut socket, &result).await?;
-        println!("Job {} completed, sent result", job.id);
+        println!("Job {} completed", job.id);
     }
 
-    println!("Worker shutting down");
     Ok(())
+}
+
+async fn send_heartbeats(mut socket: TcpStream) {
+    let mut interval = time::interval(Duration::from_secs(5));
+
+    loop {
+        interval.tick().await;
+
+        if send_json(&mut socket, &WorkerMessage::Heartbeat)
+            .await
+            .is_err()
+        {
+            eprintln!("Failed to send heartbeat, connection lost");
+            break;
+        }
+
+        println!("💓 Sent heartbeat");
+    }
 }
